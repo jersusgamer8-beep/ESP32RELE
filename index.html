@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>Control de Relé IoT</title>
+  <!--
+    Control remoto de relé con ESP32 + Firebase Realtime Database
+    Desarrollado por: Alex Romero y Thony
+  -->
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --on: #22c55e;
+      --off: #ef4444;
+      --track-off: #334155;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background: radial-gradient(circle at top, #1e293b 0%, var(--bg) 60%);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .card {
+      width: 100%;
+      max-width: 380px;
+      background: var(--card);
+      border-radius: 24px;
+      padding: 32px 24px;
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+    }
+    h1 { margin: 0 0 4px; font-size: 1.4rem; }
+    .sub { color: var(--muted); font-size: .9rem; margin-bottom: 28px; }
+
+    /* Indicador (bombillo) */
+    .lamp {
+      width: 96px; height: 96px; margin: 0 auto 24px;
+      border-radius: 50%;
+      background: var(--off);
+      box-shadow: 0 0 0 8px rgba(239,68,68,.15);
+      transition: background .3s, box-shadow .3s;
+      display: grid; place-items: center;
+      font-size: 2.2rem;
+    }
+    .lamp.on {
+      background: var(--on);
+      box-shadow: 0 0 0 8px rgba(34,197,94,.18), 0 0 40px rgba(34,197,94,.55);
+    }
+
+    .estado { font-size: 1.6rem; font-weight: 700; margin-bottom: 24px; letter-spacing: .05em; }
+    .estado.on  { color: var(--on); }
+    .estado.off { color: var(--off); }
+
+    /* Interruptor */
+    .switch { position: relative; display: inline-block; width: 150px; height: 76px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0; cursor: pointer;
+      background: var(--track-off);
+      border-radius: 76px;
+      transition: background .3s;
+    }
+    .slider::before {
+      content: ""; position: absolute;
+      height: 60px; width: 60px; left: 8px; top: 8px;
+      background: #fff; border-radius: 50%;
+      transition: transform .3s;
+      box-shadow: 0 4px 10px rgba(0,0,0,.35);
+    }
+    input:checked + .slider { background: var(--on); }
+    input:checked + .slider::before { transform: translateX(74px); }
+    input:disabled + .slider { opacity: .5; cursor: not-allowed; }
+
+    .conexion {
+      margin-top: 28px; font-size: .85rem; color: var(--muted);
+      display: inline-flex; align-items: center; gap: 8px;
+    }
+    .punto { width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; }
+    .punto.ok  { background: var(--on); }
+    .punto.bad { background: var(--off); }
+
+    footer { margin-top: 20px; font-size: .75rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Control de Relé</h1>
+    <div class="sub">ESP32 · Firebase en tiempo real</div>
+
+    <div id="lamp" class="lamp">💡</div>
+    <div id="estado" class="estado off">APAGADO</div>
+
+    <label class="switch" aria-label="Interruptor del relé">
+      <input type="checkbox" id="interruptor" disabled />
+      <span class="slider"></span>
+    </label>
+
+    <div class="conexion">
+      <span id="punto" class="punto"></span>
+      <span id="conexionTxt">Conectando…</span>
+    </div>
+
+    <footer>Desarrollado por Alex Romero y Thony</footer>
+  </main>
+
+  <script type="module">
+    // SDK modular de Firebase v10 desde CDN
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import { getDatabase, ref, onValue, set }
+      from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+    // ============ PEGA AQUÍ TUS CREDENCIALES DE FIREBASE ============
+    const firebaseConfig = {
+      apiKey:            "AIzaSyBfCc0UbkT3LgeVLFshXl61c7wC50xexG8",
+      authDomain:        "releesp32-8ef8e.firebaseapp.com",
+      databaseURL:       "https://releesp32-8ef8e-default-rtdb.firebaseio.com",
+      projectId:         "releesp32-8ef8e",
+      storageBucket:     "releesp32-8ef8e.firebasestorage.app",
+      messagingSenderId: "267840320803",
+      appId:             "1:267840320803:web:04b8ea0fe4883c8add0896"
+    };
+    // =================================================================
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+    const releRef = ref(db, "rele/estado");
+
+    const $int   = document.getElementById("interruptor");
+    const $lamp  = document.getElementById("lamp");
+    const $est   = document.getElementById("estado");
+    const $punto = document.getElementById("punto");
+    const $conTx = document.getElementById("conexionTxt");
+
+    function pintar(encendido) {
+      $int.checked = encendido;
+      $lamp.classList.toggle("on", encendido);
+      $est.classList.toggle("on", encendido);
+      $est.classList.toggle("off", !encendido);
+      $est.textContent = encendido ? "ENCENDIDO" : "APAGADO";
+    }
+
+    // Escucha en tiempo real: refleja cambios hechos desde cualquier dispositivo
+    onValue(releRef, (snap) => {
+      pintar(snap.val() === true);
+      $int.disabled = false;
+    }, (err) => {
+      console.error(err);
+      $conTx.textContent = "Error: " + err.code;
+      $punto.className = "punto bad";
+    });
+
+    // Estado de la conexión con Firebase
+    onValue(ref(db, ".info/connected"), (snap) => {
+      const ok = snap.val() === true;
+      $punto.className = "punto " + (ok ? "ok" : "bad");
+      $conTx.textContent = ok ? "Conectado a Firebase" : "Sin conexión";
+    });
+
+    // Al mover el interruptor se escribe el nuevo valor en la base de datos
+    $int.addEventListener("change", () => {
+      const valor = $int.checked;
+      pintar(valor); // respuesta visual inmediata
+      set(releRef, valor).catch((e) => {
+        console.error(e);
+        pintar(!valor); // revertir si falla la escritura
+        $conTx.textContent = "No se pudo escribir: " + e.code;
+        $punto.className = "punto bad";
+      });
+    });
+  </script>
+</body>
+</html>xº
